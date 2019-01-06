@@ -114,6 +114,7 @@ describe("State", () => {
 
         state.should.be.eq(1);
 
+
         store2.stateSync.should.be.eq(1);
 
         await store.reset();
