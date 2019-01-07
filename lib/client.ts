@@ -117,31 +117,48 @@ export class Client extends EventDispatcher {
 
         let value = this._getStateFromCache(name);
 
-        if (isNaN(value)) {
-            let tempValue = await (this._client as any).get(`${this._keyName}:${name}`)
-            value = parseFloat(tempValue);
+        if (value != null) {
+            return value
         }
 
-        if (isNaN(value)) {
-            value = this._options.initial;
+        value = await this._getStateFromDb(name);
+
+        if (value != null) {
+            return value;
         }
 
-        this._refreshState(name, value);
-
-        return value
+        return this._options.initial
     }
 
-    private _getStateFromCache(name: string) {
+    private _getStateFromCache(name: string): number {
         if (!this._options.cache) {
-            return NaN
+            return null
         }
         let result = this._cache.get(name);
 
         if (!result) {
-            return NaN
+            return null
         }
 
         return result.value;
+    }
+
+    private async _getStateFromDb(name: string): Promise<number> {
+        let result = await this._client.get(`${this._keyName}:${name}`)
+
+        if (result == null) {
+            return null
+        }
+
+        let value = parseFloat(result);
+
+        if (isNaN(value)) {
+            return null
+        }
+
+        this._refreshState(name, value);
+
+        return value;
     }
 
     public async set(name: string, value: number, expire: number): Promise<number> {
