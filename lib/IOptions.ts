@@ -7,24 +7,25 @@ export interface IOptions {
     db?: number
     redisClient?: Redis.Redis
     redisPubSub?: Redis.Redis
-    initial?:number
+    initial?: number
+    cache?: boolean
+    cacheTime?: number
+    cacheItems?: number
 }
 
 export let DefaultOptions: Partial<IOptions> = {
     expire: 0,
     db: 0,
-    initial:0
+    initial: 0,
+    cache: true,
+    cacheTime: 60 * 1000,
+    cacheItems: 10000
+
 }
 
-export interface IncrOptions {
-    name?: string,
-    value: number,
-    expire?: number,
-    initial?: number
-}
 
-export let IncrDefaults:IncrOptions  = {
-    name:"default",
+export let IncrDefaults = {
+    name: "default",
     value: 0,
     expire: 0
 }

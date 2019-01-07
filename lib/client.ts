@@ -36,10 +36,9 @@ export class Client extends EventDispatcher {
         this._expireEventName = `__keyevent@${this._options.db}__:expired`;
         this._publishStateEventName = `incr_state_${this._options.name}`;
         this._publishEventName = `incr_publish_${this._options.name}`;
-        this._keyName = `incr_{${this._options.name}}`
+        this._keyName = `incr_{${this._options.name}}`;
 
-        this._cache = new Cache({maxSize: 10000, maxAge: 60 * 1000});
-
+        this._cache = new Cache({maxSize: this._options.cacheItems, maxAge: this._options.cacheTime});
     }
 
 
@@ -75,7 +74,6 @@ export class Client extends EventDispatcher {
 
         this._client.config("SET", "notify-keyspace-events", "Ex");
 
-
         this._sub.subscribe(this._publishStateEventName);
         this._sub.subscribe(this._expireEventName);
         this._sub.subscribe(this._publishEventName);
@@ -94,12 +92,14 @@ export class Client extends EventDispatcher {
     private async loadScripts() {
 
         await Promise.all(this.Scripts.map(async script => {
+            if (this._client[script.name]) {
+                return;
+            }
             let lua = await promisify(fs.readFile)(path.resolve(__dirname, "lua", `${script.name}.lua`), {encoding: "UTF8"});
             this._client.defineCommand(script.name, {numberOfKeys: script.args, lua: lua});
         }));
 
     }
-
 
     public async incr(name: string, increment: number, expire: number): Promise<number> {
 
@@ -115,23 +115,33 @@ export class Client extends EventDispatcher {
 
     public async state(name: string): Promise<number> {
 
-        let value;
+        let value = this._getStateFromCache(name);
 
-        let result = this._cache.get(name);
-
-        if (result) {
-            value = result.value
-        } else {
-
+        if (isNaN(value)) {
             let tempValue = await (this._client as any).get(`${this._keyName}:${name}`)
             value = parseFloat(tempValue);
+        }
 
-            value = isNaN(value) ? this._options.initial : value
+        if (isNaN(value)) {
+            value = this._options.initial;
         }
 
         this._refreshState(name, value);
 
         return value
+    }
+
+    private _getStateFromCache(name: string) {
+        if (!this._options.cache) {
+            return NaN
+        }
+        let result = this._cache.get(name);
+
+        if (!result) {
+            return NaN
+        }
+
+        return result.value;
     }
 
     public async set(name: string, value: number, expire: number): Promise<number> {
@@ -194,7 +204,6 @@ export class Client extends EventDispatcher {
             let oldValue = old ? old.value : this._options.initial;
 
             this._cache.set(name, {value});
-
 
             if (oldValue != value) {
                 process.nextTick(() => this.fireEvent("stateChanged", value, name))
