@@ -1,4 +1,4 @@
-local key = string.format("incr_{%s}", KEYS[1])
+local key = string.format("incr:%s:%s", KEYS[1],KEYS[2])
 local publishName = string.format("incr_state_%s", KEYS[1])
 
 local expire = tonumber(ARGV[3]);
@@ -9,11 +9,11 @@ if (changed == 1 and expire > 0) then
     redis.call("pexpire", key, expire)
 end
 
-local newIncr = redis.call("INCRBYFLOAT", key, tonumber(ARGV[1]));
+local incr = redis.call("INCRBYFLOAT", key, tonumber(ARGV[1]));
 
-redis.call("PUBLISH", publishName, newIncr)
+redis.call("PUBLISH", publishName,KEYS[2].."##"..incr)
 
-return newIncr
+return {KEYS[2],incr}
 
 
 

@@ -1,9 +1,9 @@
 import Redis = require("ioredis");
 import path = require("path");
 import fs = require("fs");
-import _ = require("lodash");
 import {IOptions} from "./IOptions";
 import {EventDispatcher} from "appolo-event-dispatcher";
+import {Cache} from "appolo-cache/index";
 
 const {promisify} = require('util');
 
@@ -11,18 +11,18 @@ export class Client extends EventDispatcher {
 
     private _client: Redis.Redis;
     private _sub: Redis.Redis;
+    private _cache: Cache<string, { value: number }>
 
-    private _state: number;
 
     private _interval = null;
 
 
     private readonly Scripts = [{
-        name: "incr", args: 1
+        name: "state_incr", args: 2
     }, {
-        name: "reset", args: 1
+        name: "state_reset", args: 2
     }, {
-        name: "set", args: 1
+        name: "state_set", args: 2
     }];
 
     private readonly _expireEventName: string;
@@ -30,13 +30,16 @@ export class Client extends EventDispatcher {
     private readonly _publishEventName: string;
     private readonly _keyName: string;
 
-    constructor(private _initialState: number, private _options: IOptions) {
+    constructor(private _options: IOptions) {
         super();
 
         this._expireEventName = `__keyevent@${this._options.db}__:expired`;
         this._publishStateEventName = `incr_state_${this._options.name}`;
         this._publishEventName = `incr_publish_${this._options.name}`;
         this._keyName = `incr_{${this._options.name}}`
+
+        this._cache = new Cache({maxSize: 10000, maxAge: 60 * 1000});
+
     }
 
 
@@ -49,10 +52,12 @@ export class Client extends EventDispatcher {
 
         await this.loadScripts();
 
-        this._client.on("reconnecting", this._onConnectionClose.bind(this));
-        this._client.on("close", this._onConnectionClose.bind(this));
-        this._client.on("end", this._onConnectionClose.bind(this));
-        this._client.on("connect", this._onConnectionOpen.bind(this));
+        if (!this._options.redisClient) {
+            this._client.on("reconnecting", this._onConnectionClose.bind(this));
+            this._client.on("close", this._onConnectionClose.bind(this));
+            this._client.on("end", this._onConnectionClose.bind(this));
+            this._client.on("connect", this._onConnectionOpen.bind(this));
+        }
 
         let connectPromises = [];
 
@@ -77,8 +82,6 @@ export class Client extends EventDispatcher {
 
         this._sub.on("message", this._onMessage.bind(this));
 
-        this._state = await this.state();
-
     }
 
     private _onConnectionClose() {
@@ -90,7 +93,7 @@ export class Client extends EventDispatcher {
 
     private async loadScripts() {
 
-        await Promise.all(_.map(this.Scripts, async script => {
+        await Promise.all(this.Scripts.map(async script => {
             let lua = await promisify(fs.readFile)(path.resolve(__dirname, "lua", `${script.name}.lua`), {encoding: "UTF8"});
             this._client.defineCommand(script.name, {numberOfKeys: script.args, lua: lua});
         }));
@@ -98,45 +101,44 @@ export class Client extends EventDispatcher {
     }
 
 
-    public async incr(incr: number, expire: number): Promise<number> {
+    public async incr(name: string, increment: number, expire: number): Promise<number> {
 
-
-        let value = await (this._client as any).incr(this._options.name, incr, this._initialState, expire || 0);
+        let [, value] = await (this._client as any).state_incr(this._options.name, name, increment, this._options.initial, expire || this._options.expire || 0);
 
         value = parseFloat(value);
 
-        this._refreshState(value);
+        this._refreshState(name, value);
 
         return value;
     }
 
 
-    public stateSync(): number {
+    public async state(name: string): Promise<number> {
 
-        return this._state
-    }
+        let value;
 
+        let result = this._cache.get(name);
 
-    public async state(): Promise<number> {
+        if (result) {
+            value = result.value
+        } else {
 
-        let value = await (this._client as any).get(this._keyName);
+            let tempValue = await (this._client as any).get(`${this._keyName}:${name}`)
+            value = parseFloat(tempValue);
 
-        if (!value) {
-            value = this._initialState;
+            value = isNaN(value) ? this._options.initial : value
         }
 
-        value = parseFloat(value);
-
-        this._refreshState(value);
+        this._refreshState(name, value);
 
         return value
     }
 
-    public async set(value: number, expire: number = 0): Promise<number> {
+    public async set(name: string, value: number, expire: number): Promise<number> {
 
-        await (this._client as any).set(this._options.name, value, expire);
+        await (this._client as any).state_set(this._options.name, name, value, expire || this._options.expire || 0);
 
-        this._refreshState(value);
+        this._refreshState(name, value);
 
         return value
     }
@@ -168,35 +170,36 @@ export class Client extends EventDispatcher {
 
     private _handleState(message: string) {
 
-        this._refreshState(parseFloat(message))
+        let [name, value] = message.split("##");
+
+
+        this._refreshState(name, parseFloat(value))
 
     }
 
     private _handleExpire(message: string) {
 
-        if (message == this._keyName) {
-            this._refreshState(this._initialState);
+        let [, key, name] = message.split(":");
+
+        if (key == this._options.name && this._cache.get(name)) {
+            this._refreshState(name, this._options.initial);
         }
     }
 
-    private async _refreshState(newState?: number) {
+    private async _refreshState(name: string, value: number) {
 
         try {
-            clearTimeout(this._interval);
 
-            let oldState = this._state;
+            let old = this._cache.get(name);
+            let oldValue = old ? old.value : this._options.initial;
 
-            if (newState) {
-                this._state = newState
-            } else {
-                this._state = await this.state()
+            this._cache.set(name, {value});
+
+
+            if (oldValue != value) {
+                process.nextTick(() => this.fireEvent("stateChanged", value, name))
             }
 
-            if (oldState != this._state) {
-                process.nextTick(() => this.fireEvent("stateChanged", this._state))
-            }
-
-            this._interval = setTimeout(() => this._refreshState(), 10 * 1000)
         } catch (e) {
 
         }
@@ -209,10 +212,8 @@ export class Client extends EventDispatcher {
 
     }
 
-    public async reset(state: number) {
-        this._initialState = this._state = state || this._initialState;
-
-        await (this._client as any).reset(this._options.name, this._initialState);
+    public async reset(name: string) {
+        await (this._client as any).state_reset(this._options.name, name, this._options.initial);
     }
 
 

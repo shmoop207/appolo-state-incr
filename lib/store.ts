@@ -1,4 +1,4 @@
-import {DefaultOptions, IOptions} from "./IOptions";
+import {DefaultOptions, IncrDefaults, IOptions} from "./IOptions";
 import {EventDispatcher} from "appolo-event-dispatcher";
 import {Client} from "./client";
 import {IEventOptions} from "appolo-event-dispatcher/lib/IEventOptions";
@@ -10,14 +10,12 @@ export class Store extends EventDispatcher {
     private readonly _options: IOptions;
 
 
-    constructor(private initialState: number, options: IOptions) {
+    constructor(options: IOptions) {
 
         super();
 
         this._options = Object.assign({}, DefaultOptions, options);
-
-
-        this._client = new Client(initialState, this._options);
+        this._client = new Client(this._options);
     }
 
     public async initialize(): Promise<void> {
@@ -28,8 +26,8 @@ export class Store extends EventDispatcher {
 
     }
 
-    private _onStateChanged(state: number) {
-        this.fireEvent("stateChanged", state)
+    private _onStateChanged(state: number, name: string) {
+        this.fireEvent("stateChanged", state,name)
     }
 
     private _onPublish(message: { name: string, data: any }) {
@@ -37,41 +35,53 @@ export class Store extends EventDispatcher {
 
     }
 
-    public get state(): Promise<number> {
-        return this._client.state();
+    public async state(name: string = IncrDefaults.name): Promise<number> {
+        let result = await this._client.state(name);
+
+        return result;
     }
 
-
-    public get stateSync(): number {
-        return this._client.stateSync();
+    public once(event: string, fn?: (...args: any[]) => any, scope?: any, options: IEventOptions = {}): Promise<[number,string]> {
+        return super.once(event, fn, scope, options) as  Promise<[number,string]>
     }
 
+    public async increment(name?: string | number, increment?: number, expire?: number): Promise<number> {
 
-    public once(event: string, fn?: (...args: any[]) => any, scope?: any, options: IEventOptions = {}): Promise<number> {
-        return super.once(event, fn, scope, options) as  Promise<number>
-    }
+        let params = this._getParams(name, increment, expire);
 
-
-    public async increment(increment: number = 1, expire?: number): Promise<number> {
-        let value = await this._client.incr(increment, expire || this._options.expire);
+        let value = await this._client.incr(params.name, params.value, params.expire);
 
         return value;
     }
 
-    public async set(value: number = 1, expire?: number): Promise<number> {
-        await this._client.set(value, expire || this._options.expire);
+    private _getParams(name: string | number, value: number, expire: number): { name: string, value: number, expire: number } {
+        if (typeof name !== 'string') {
+            expire = value;
+            value = name as number;
+            name = IncrDefaults.name;
 
-        return value;
-    }
-
-
-    public async reset(value?: number) {
-
-        if (value) {
-            this.initialState = value;
         }
 
-        await this._client.reset(this.initialState)
+        name = name || IncrDefaults.name;
+        value = value === undefined ? 1 : value;
+        expire = expire || 0;
+
+        return {name, value, expire}
+    }
+
+    public async set(value?: number, expire?: number): Promise<number>
+    public async set(name?: string | number , value?: number , expire?: number): Promise<number> {
+        let params = this._getParams(name, value, expire);
+
+        await this._client.set(params.name, params.value, params.expire);
+
+        return value;
+    }
+
+
+    public async reset(name: string = IncrDefaults.name) {
+
+        await this._client.reset(name);
 
     }
 
