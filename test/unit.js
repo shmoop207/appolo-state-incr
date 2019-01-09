@@ -44,7 +44,7 @@ describe("State", () => {
         await Promise.all([
             store.increment(1), store3.increment(2), store2.increment(3)
         ]);
-        await delay(500);
+        await delay(1000);
         (await store.state()).should.be.eq(6);
         await Promise.all([store2.quit(), store3.quit()]);
     });

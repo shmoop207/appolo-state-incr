@@ -19,10 +19,13 @@ export class Store extends EventDispatcher {
     }
 
     public async initialize(): Promise<void> {
-        await this._client.connect();
 
         this._client.on("stateChanged", this._onStateChanged, this);
         this._client.on("publishEvent", this._onPublish, this);
+
+        await this._client.connect();
+
+
 
     }
 

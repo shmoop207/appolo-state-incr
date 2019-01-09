@@ -74,11 +74,10 @@ export class Client extends EventDispatcher {
 
         this._client.config("SET", "notify-keyspace-events", "Ex");
 
-        this._sub.subscribe(this._publishStateEventName);
-        this._sub.subscribe(this._expireEventName);
-        this._sub.subscribe(this._publishEventName);
-
         this._sub.on("message", this._onMessage.bind(this));
+
+        await Promise.all( [this._sub.subscribe(this._publishStateEventName),this._sub.subscribe(this._expireEventName),this._sub.subscribe(this._publishEventName)]);
+
 
     }
 
